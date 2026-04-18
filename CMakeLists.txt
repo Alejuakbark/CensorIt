@@ -3,17 +3,26 @@
 # OBS compatibility: compile and link against the libobs headers/libs from the same OBS
 # major.minor (e.g. 32.0) you target. OBS 32+ rejects plugins built with a newer libobs than the app.
 #
-# Prerequisites (Windows):
-#   - CMake 3.16+, MSVC x64
-#   - libobs (obs.h, obs-module.h, obs.lib) from your OBS version's development files
+# Prerequisites:
+#   - CMake 3.16+, C++17 compiler (MSVC on Windows; Clang/GCC on macOS/Linux)
+#   - libobs: headers (directory containing obs.h) + import/shared library to link:
+#       Windows: obs.lib
+#       Linux:   libobs.so (full path or import lib from your OBS/libobs build)
+#       macOS:   libobs.dylib (same idea; match OBS version you run)
 #   - OpenCV 4.x with dnn, imgproc, core
 #
-# Configure example (PowerShell):
+# Configure example (PowerShell) — system OpenCV:
 #   cmake -B build -A x64 `
 #     -D CMAKE_PREFIX_PATH="C:/path/to/opencv/build" `
 #     -D LIBOBS_INCLUDE_DIR="C:/path/to/libobs" `
 #     -D LIBOBS_LIB="C:/path/to/obs.lib"
 #   cmake --build build --config Release
+#
+# Or run .\build.ps1 -UseVcpkg -LibObsInclude ... -LibObsLib ... (OpenCV via vcpkg.json).
+# Linux/macOS: ./build.sh --use-vcpkg --libobs-include ... --libobs-lib ...
+#
+# After a successful Windows build, install into OBS (often requires Admin for Program Files):
+#   powershell -ExecutionPolicy Bypass -File scripts/install-to-obs.ps1
 #
 # Install (after Release build), example:
 #   cmake --install build --prefix "C:/Program Files/obs-studio"
@@ -33,7 +42,7 @@ if(MSVC)
 endif()
 
 set(LIBOBS_INCLUDE_DIR "" CACHE PATH "Directory containing obs.h (libobs)")
-set(LIBOBS_LIB "" CACHE FILEPATH "Path to obs.lib")
+set(LIBOBS_LIB "" CACHE FILEPATH "Path to libobs: obs.lib (Windows) or libobs.so / libobs.dylib (Unix)")
 
 if(NOT LIBOBS_INCLUDE_DIR OR NOT LIBOBS_LIB)
   message(FATAL_ERROR "Set LIBOBS_INCLUDE_DIR and LIBOBS_LIB (see comments at top of CMakeLists.txt).")
@@ -57,7 +66,8 @@ target_link_libraries(obs_license_plate_blur PRIVATE
   opencv_dnn
 )
 
-if(WIN32)
+# OBS expects plugin basename "obs_license_plate_blur" (no leading "lib") on all platforms.
+if(WIN32 OR UNIX)
   set_target_properties(obs_license_plate_blur PROPERTIES PREFIX "")
 endif()
 

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -180,6 +181,72 @@ static bool frame_to_bgr(struct obs_source_frame *frame, cv::Mat &out_bgr)
 	default:
 		return false;
 	}
+}
+
+/** Solid black (luma 0, chroma neutral) for supported YUV/RGB packed formats. */
+static void plate_blur_frame_fill_black(struct obs_source_frame *f)
+{
+	if (!f)
+		return;
+	switch (f->format) {
+	case VIDEO_FORMAT_I420: {
+		for (uint32_t row = 0; row < f->height; row++)
+			memset(f->data[0] + (size_t)row * f->linesize[0], 0, (size_t)f->width);
+		const uint32_t cw = f->width / 2;
+		const uint32_t ch = f->height / 2;
+		for (uint32_t row = 0; row < ch; row++) {
+			memset(f->data[1] + (size_t)row * f->linesize[1], 128, (size_t)cw);
+			memset(f->data[2] + (size_t)row * f->linesize[2], 128, (size_t)cw);
+		}
+		return;
+	}
+	case VIDEO_FORMAT_NV12: {
+		for (uint32_t row = 0; row < f->height; row++)
+			memset(f->data[0] + (size_t)row * f->linesize[0], 0, (size_t)f->width);
+		for (uint32_t row = 0; row < f->height / 2; row++)
+			memset(f->data[1] + (size_t)row * f->linesize[1], 128, (size_t)f->width);
+		return;
+	}
+	case VIDEO_FORMAT_BGRA: {
+		for (uint32_t row = 0; row < f->height; row++) {
+			uint8_t *p = f->data[0] + (size_t)row * f->linesize[0];
+			for (uint32_t x = 0; x < f->width; x++) {
+				p[x * 4 + 0] = 0;
+				p[x * 4 + 1] = 0;
+				p[x * 4 + 2] = 0;
+				p[x * 4 + 3] = 255;
+			}
+		}
+		return;
+	}
+	case VIDEO_FORMAT_RGBA: {
+		for (uint32_t row = 0; row < f->height; row++) {
+			uint8_t *p = f->data[0] + (size_t)row * f->linesize[0];
+			for (uint32_t x = 0; x < f->width; x++) {
+				p[x * 4 + 0] = 0;
+				p[x * 4 + 1] = 0;
+				p[x * 4 + 2] = 0;
+				p[x * 4 + 3] = 255;
+			}
+		}
+		return;
+	}
+	default:
+		return;
+	}
+}
+
+/** Black frame matching \p ref (same format, size, timestamp). Caller destroys. */
+static struct obs_source_frame *plate_blur_black_frame_like(const struct obs_source_frame *ref)
+{
+	if (!ref)
+		return nullptr;
+	struct obs_source_frame *out = obs_source_frame_create(ref->format, ref->width, ref->height);
+	if (!out)
+		return nullptr;
+	out->timestamp = ref->timestamp;
+	plate_blur_frame_fill_black(out);
+	return out;
 }
 
 static bool bgr_to_frame_format(const cv::Mat &bgr, struct obs_source_frame *dst)
@@ -494,6 +561,15 @@ static void plate_blur_destroy(void *data)
 
 static void plate_blur_get_defaults(obs_data_t *settings)
 {
+	obs_module_t *mod = obs_current_module();
+	if (mod) {
+		char *bundled = obs_module_file(mod, "models/license_plate.onnx");
+		if (bundled) {
+			if (std::filesystem::exists(bundled))
+				obs_data_set_default_string(settings, S_MODEL_PATH, bundled);
+			bfree(bundled);
+		}
+	}
 	obs_data_set_default_double(settings, S_CONF, 0.35);
 	obs_data_set_default_double(settings, S_NMS, 0.45);
 	obs_data_set_default_int(settings, S_EVERY_N, 2);
@@ -691,8 +767,10 @@ static struct obs_source_frame *plate_blur_filter_video(void *data, struct obs_s
 		incoming_copy->timestamp = frame->timestamp;
 		filter->delay_queue.push_back(incoming_copy);
 
-		if ((int)filter->delay_queue.size() <= delay_frames)
-			return frame;
+		if ((int)filter->delay_queue.size() <= delay_frames) {
+			struct obs_source_frame *black = plate_blur_black_frame_like(frame);
+			return black ? black : frame;
+		}
 
 		if (!filter->logged_delay_info) {
 			filter->logged_delay_info = true;
